@@ -1,0 +1,232 @@
+---
+title: "Esame di Statistical Modeling"
+author: "Mario Pedol"
+date: "4/20/2021"
+output:
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Set Up Environment
+
+Prima di iniziare a svolgere l'esercizio è necessario fare il caricamento di tutte le librerie necessarie ai fini dell'analisi. Si defenisce inoltre, la funzione per il test di white necessaria in seguito e si caricano i dati.\
+\
+```{r, message=FALSE, warning=FALSE}
+library(skedastic)
+library(car)
+library(describedata)
+library(psych)
+library(klaR)
+library(olsrr)
+library(sandwich)
+library(systemfit)
+library(DataCombine)
+library(lmtest)
+white.test<-function(lmod){
+  
+  u2<-lmod$residuals^2
+  
+  y<-lmod$fitted
+  
+  R2u<-summary(lm(u2~y+I(y^2)))$r.squared
+  
+  LM<-length(y)*R2u
+  
+  p.val<-1-pchisq(LM,2)
+  
+  data.frame("Test Statistic"=LM, "P"=p.val)
+}
+data<-read.csv("~/Desktop/sm_esame290421.csv", header=TRUE)
+head(data)
+```
+
+# Statistiche Descrittive
+
+Prima di iniziare ad esplorare i dati con opportune statistiche descrittive effettuo un controllo per verificare che il datastet sia stato letto correttamente, se così non fosse, occorre modificare i parametri di lettura o il type delle variabili.\
+\
+```{r, message=FALSE, warning=FALSE}
+str(data)
+```
+\
+I dati sembrano essere stati letti senza errori.\
+Ora è possibile svolgere delle analisi descrittive che ci permettano di prendere confidenza con i dati.\
+\
+```{r, message=FALSE, warning=FALSE}
+summary(data)
+```
+\
+Dalla summary si vedono range non troppo elevati per $x_1, x_2$ che presentano anche un valore minimo negativo, mentre $y$ presenta un range contenuto.\
+Range elvati si trovano invece per la varibile $time$ e sopratutto $x_3$.\
+Proseguendo con le analisi si decide di utilizzare la funzione pairs.panels sulle variabili numeriche che ci consente di valutre le dstribuzioni e le correlazione delle variabili selezionate contemporanemente.\
+\
+```{r, message=FALSE, warning=FALSE}
+var_num<-c('time','y','x1','x2','x3')
+pairs.panels(data[,var_num])
+```
+\
+Dal grafico emergono distrbuzioni piuttosto simmetriche tranne per $x_3$ che risulta fortemnte schiacciata a destra.\
+Si notano alcune correllazioni negative, anche se non particolarmente elevate come $x_3$ con $y$, mentre invece la correlazione più alta al 70% risulta essere quella tra $x_3$ e $x_1$.
+\
+```{r, message=FALSE, warning=FALSE}
+par(mfrow=c(3,2)) 
+for(i in var_num){
+  boxplot(data[,i],main=i,col="grey",ylab=i)
+}
+```
+\
+Dai Box Plot risulta che $x_3$ è particolarmente schiaccita verso lo 0 con alcuni valori anomali, risulta anche qualche osservazione anomala per $x_1$ e $y$.\
+
+# Modelli
+Si passa ora alla specifica del modello e alla stima dei paramentri rischiesta dal punto 2 dell'esercizio.\
+\
+```{r, message=FALSE, warning=FALSE}
+mod<-lm(y~x1+x2+I(log(x3)),data)
+summary(mod)
+```
+\
+Nel modello risultano molto significativi i parametri dell'intercetta e $x_2$, mentre non sono significativi $x_1$ e $log(x_3)$.\
+I parametri possono essere interpretati come segue:\
+\
+1. x1: Un incremento unitario di $x_1$ porta ad un aumento dello 0.0225 del volore di y, al netto di tutte le altre variabili.\
+2. x2: Un incremento unitario di $x_2$ porta ad un aumento dello 0.7037 del volore di y, al netto di tutte le altre variabili.\
+3. log(x3): Per l'incremento dell'1% del tasso di $x_3$ y diminuisce dello 0.0089%  (unità) al netto di tutte le altre varibaili.\
+In generale, il modello ha un $R^2$ piccolo circa 32%, tuttavia si rifiuta l'ipotesi nulla $H_0:R^2=0$ alle usuali soglie di significatività, quindi si accetta il modello.\
+\
+Si procede ora a testatre le ipotesi del modello classico.
+\
+### Multicollinearità
+```{r, message=FALSE, warning=FALSE}
+ols_vif_tol(mod)
+ols_eigen_cindex(mod)
+```
+\
+Si nota subito che i valori della varianza fattoriale sono elvati per $x_1$ e $x_3$, anche il condition index è elevato per tali valori. Per risolvere la presenza di multicollinearità allora si decide di togliere dal modello l'esplicativia con l'autovalore più elvato ossia $x_1$.\
+\
+```{r, message=FALSE, warning=FALSE}
+mod<-lm(y~x2+I(log(x3)),data)
+summary(mod)
+```
+\
+Come ci si poteva aspettare anche se l'$R^2$ non è variato, ora tutti i parametri del modello sono significativi.\
+\
+```{r, message=FALSE, warning=FALSE}
+ols_vif_tol(mod)
+```
+\
+Non sembrano esserci più problemi di multicollinerità, si procede dunque a testare le altre ipotesi.\
+
+### Omoschedasticità
+
+Per testare questa ipotesi se deciso ti usare il seguente grafico e il test di White.\
+\
+```{r, message=FALSE, warning=FALSE}
+par(mfrow=c(1,1))
+plot(mod$fitted, mod$residuals)
+abline(h=0)
+white.test(mod)
+```
+\
+Dal grafico è difficile capire se i residui presentino un andamento a ventaglio che indichi la presenza di eteroschedasticità. Affidandoci al test di white, non si rifiuta l'ipotesi nulla che i residui siano normali. si precede dunque con la prossima ipotesi.\
+
+### Outlier
+\
+Per verificare la presenza di outlier si analizzano i grafici della distanza di cook e dei residui studentizzati con le loro reltive soglie.\
+\
+```{r, message=FALSE, warning=FALSE}
+par(mfrow=c(1,2))
+k=length(coef(mod))
+n=nrow(data)
+plot(mod, which = 4)
+abline(h=4/n)
+plot(hatvalues(mod), rstudent(mod))
+text(hatvalues(mod), rstudent(mod))
+abline(h=2)
+abline(h=-2)
+abline(v=2*k/n)
+abline(v=-2*k/n)
+```
+\
+Si nota la presenza di diverisi valori anomali e influenti, in particolar modo si identificano le osservazioni 4, 13, 172, 175, 126, ecc..., si passa alla rimozione di tali osservazioni secondo le soglie qui sopra indicate.\
+\
+```{r, message=FALSE, warning=FALSE}
+nout<-data[hatvalues(mod)<=2*k/n& abs(rstudent(mod))<2 & cooks.distance(mod)<4/n,]
+mod<-lm(y~x2+I(log(x3)),nout)
+summary(mod)
+```
+\
+Il modello sembra avere aumentato l'$R^2$ al 34% grazie alla rimozione dei valori Outlier.\
+
+### Normalità
+\
+Si testa ora come ultima ipotesi la normalità, a tale scopo verranno utilizzati i test di shapiro wilk e Kolmogorov-Smirnov e il seguente grafico QQplot
+\
+```{r, message=FALSE, warning=FALSE}
+plot(mod, which = 2)
+ols_test_normality(mod$residuals)
+```
+\
+Dal grafico i residui risultano approssivativamente normali, anche se i valori sulle code si discotano un po' dai quantili teorici.\
+Infatti, i test non rifiutano l'ipotesi nulla di normalità.\
+
+### Autocorrelzione
+\
+Come richiesto dall'esercizio si ristima il modello partendo dall'utlimo trovato precedentemente, il modello utilizzerà tutte le osservazioni quindi non vengono omessi dati outlier.\
+Prima di procedere però si preferisce, poiché si ha a disposizione di ordinare i dati secondo la varibile $time$ non inclusa nel modello.\
+\
+```{r, message=FALSE, warning=FALSE}
+data<-data[order(data$time),]
+mod<-lm(y~x2+I(log(x3)),data)
+summary(mod)
+```
+Si passa ora verificare l'ipotesi di autocorrelazione tramite un opprtuno grafico (correlogramma Parziale) e un opportuno test, Durbin Watson.\
+\
+```{r, message=FALSE, warning=FALSE}
+durbinWatsonTest(mod)
+autocorr <- pacf(resid(mod),lwd=2, plot = F)
+plot(autocorr,xlim = c(1,10), ylim = c(0,0.2), main = "Autocorrelogramma Parziale")
+
+```
+\
+Dal grafico si sopsetta un autocorrelazione di primo grado, si rifiuto inoltre l'ipotesi nulla del test di DW che i residui siano incorralti.\
+\
+Si rislove la situzione mediante il metodo di Chorcane-Orcutt descritto e sviluppato nei passaggi successivi:
+\
+```{r, message=FALSE, warning=FALSE}
+data$x5<-log(data$x3)
+data$u_hat<-mod$residuals
+data<-slide(data, Var='u_hat', TimeVar='time', NewVar='u_hat_lag')
+
+#Calcolo il moello ausliario
+aux<-lm(u_hat~u_hat_lag,data)
+rho<-aux$coefficients[2]
+
+#Definisco le varibili esplicative ritardate
+data<-slide(data, Var='y', TimeVar='time', NewVar='y_lag')
+data<-slide(data, Var='x2', TimeVar='time', NewVar='x2_lag')
+data<-slide(data, Var='x5', TimeVar='time', NewVar='x5_lag')
+
+#Definisco le varibili trasformate
+data$inter<-1-rho
+data$y_t<-data$y-rho*data$y_lag
+data$x2_t<-data$x2-rho*data$x2_lag
+data$x5_t<-data$x5-rho*data$x5_lag
+
+#Modello Trasformato C-O
+mod2<-lm(y_t~0+inter+x2_t+x5_t,data)
+summary(mod2)
+```
+\
+Il modello trasformato ha aumentato significativamente il suo $R^2$ e si nota che l'autocorrellazione non c'è più.\
+\
+```{r, message=FALSE, warning=FALSE}
+durbinWatsonTest(mod2)
+autocorr <- pacf(resid(mod2),lwd=2, plot = F)
+plot(autocorr,xlim = c(1,10), ylim = c(0,0.2), main = "Autocorrelogramma Parziale")
+```
+
+
+
